@@ -34,6 +34,17 @@ struct Item {
     image: String,
 }
 
+impl Item {
+    fn weapon_type(&self) -> WeaponType {
+        for t in WeaponType::all() {
+            if self.id.contains(&t.to_string()) {
+                return t;
+            }
+        }
+        WeaponType::Other
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Character {
     id: String,
@@ -130,7 +141,7 @@ struct SlotUI {
     items: Option<Vec<button::State>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuLocation {
     Shovel,
     Weapon(Option<WeaponType>),
@@ -181,7 +192,7 @@ impl MenuLocation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WeaponType {
     Dagger,
     Broadsword,
@@ -191,10 +202,55 @@ enum WeaponType {
     Rapier,
     Bow,
     Crossbow,
+    Flail,
+    Cat,
+    Axe,
+    Harp,
+    Warhammer,
+    Staff,
+    Cutlass,
     Other,
 }
 
-#[derive(Debug)]
+impl WeaponType {
+    fn all() -> Vec<Self> {
+        use WeaponType::*;
+        vec![
+            Dagger, Broadsword, Longsword, Whip, Spear, Rapier, Crossbow, Bow, Flail, Cat, Axe,
+            Harp, Warhammer, Staff, Cutlass, Other,
+        ]
+    }
+}
+
+impl fmt::Display for WeaponType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use WeaponType::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Dagger => "dagger",
+                Broadsword => "broadsword",
+                Longsword => "longsword",
+                Whip => "whip",
+                Spear => "spear",
+                Rapier => "rapier",
+                Bow => "bow",
+                Crossbow => "crossbow",
+                Flail => "flail",
+                Cat => "cat",
+                Axe => "axe",
+                Harp => "harp",
+                Warhammer => "warhammer",
+                Staff => "staff",
+                Cutlass => "cutlass",
+                Other => "other",
+            }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OtherItemType {
     Other,
 }
@@ -206,6 +262,7 @@ enum Message {
     CurseSlot(Slot, bool),
     RemoveItem(usize, usize),
     ChooseItem(Slot, String),
+    ChooseMenu(MenuLocation),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -258,7 +315,6 @@ impl Application for UI {
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
-        eprintln!("received message {:?}\n", message);
         use Message::*;
         match message {
             CharPicked(i) => {
@@ -276,16 +332,11 @@ impl Application for UI {
                 Command::none()
             }
             SlotPressed(s) => {
-                if self
-                    .menu_location
-                    .as_ref()
-                    .map(MenuLocation::to_slot)
-                    .as_ref()
-                    == Some(&s)
-                {
+                let l = MenuLocation::from_slot(&s);
+                if self.menu_location == Some(l) {
                     self.menu_location = None;
                 } else {
-                    self.menu_location = Some(MenuLocation::from_slot(&s));
+                    self.menu_location = Some(l);
                 }
                 self.menu_choices = None;
                 Command::none()
@@ -310,6 +361,11 @@ impl Application for UI {
                     .find(|x| x.slot == slot)
                     .unwrap()
                     .items = None;
+                Command::none()
+            }
+            ChooseMenu(ml) => {
+                self.menu_location = Some(ml);
+                self.menu_choices = None;
                 Command::none()
             }
         }
@@ -401,24 +457,50 @@ impl Application for UI {
             )
             .collect();
 
+        fn items_to_menu_choices<'a, R>(
+            slot: Slot,
+            items: impl Iterator<Item = &'a Item>,
+        ) -> Vec<(iced::Element<'static, R>, Message)> {
+            items
+                .map(|i| {
+                    (
+                        Text::new(i.name.clone()).into(),
+                        Message::ChooseItem(slot, i.id.clone()),
+                    )
+                })
+                .collect()
+        }
+
         let menu = {
             let menu_choices = match &self.menu_location {
                 None => vec![],
-                Some(MenuLocation::Weapon(weapon_type)) => todo!(),
+                Some(MenuLocation::Weapon(weapon_type)) => {
+                    if let Some(weapon_type) = weapon_type {
+                        let e = vec![];
+                        let weapons = items_by_slot
+                            .get(&Slot::Weapon)
+                            .unwrap_or(&e)
+                            .into_iter()
+                            .filter(|w| w.weapon_type() == *weapon_type);
+                        items_to_menu_choices(Slot::Weapon, weapons.cloned())
+                    } else {
+                        WeaponType::all()
+                            .into_iter()
+                            .map(|t| {
+                                (
+                                    Text::new(t.to_string()).into(),
+                                    Message::ChooseMenu(MenuLocation::Weapon(Some(t))),
+                                )
+                            })
+                            .collect()
+                    }
+                }
                 Some(MenuLocation::Other(other_type)) => todo!(),
                 Some(slot) => {
                     let slot = slot.to_slot();
                     let e = vec![];
                     let slot_items = items_by_slot.get(&slot).unwrap_or(&e);
-                    slot_items
-                        .into_iter()
-                        .map(|i| {
-                            (
-                                Text::new(i.name.clone()),
-                                Message::ChooseItem(slot, i.id.clone()),
-                            )
-                        })
-                        .collect()
+                    items_to_menu_choices(slot, slot_items.into_iter().cloned())
                 }
             };
 
