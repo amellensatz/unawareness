@@ -2,6 +2,7 @@ use iced::{
     button, pick_list, Application, Button, Checkbox, Column, Command, Element as IcedElement,
     PickList, Row, Settings, Text,
 };
+use itertools::Itertools;
 use minidom::{quick_xml::Reader, Element, NSChoice};
 use regex::Regex;
 use thiserror::Error;
@@ -41,7 +42,7 @@ struct Character {
     curses: HashSet<Slot>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum Slot {
     Shovel,
     Weapon,
@@ -118,7 +119,7 @@ struct UI {
     current_character: usize,
     current_char_pick: pick_list::State<CharPick>,
     slots: Vec<SlotUI>,
-    item_choices: Option<Vec<button::State>>,
+    menu_choices: Option<Vec<button::State>>,
     menu_location: Option<MenuLocation>,
 }
 
@@ -204,6 +205,7 @@ enum Message {
     SlotPressed(Slot),
     CurseSlot(Slot, bool),
     RemoveItem(usize, usize),
+    ChooseItem(Slot, String),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -245,7 +247,7 @@ impl Application for UI {
                     })
                     .collect(),
                 menu_location: None,
-                item_choices: None,
+                menu_choices: None,
             },
             Command::none(),
         )
@@ -256,11 +258,13 @@ impl Application for UI {
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
+        eprintln!("received message {:?}\n", message);
         use Message::*;
         match message {
             CharPicked(i) => {
                 self.current_character = i;
                 self.menu_location = None;
+                self.menu_choices = None;
                 self.slots = Slot::all()
                     .into_iter()
                     .map(|slot| SlotUI {
@@ -283,6 +287,7 @@ impl Application for UI {
                 } else {
                     self.menu_location = Some(MenuLocation::from_slot(&s));
                 }
+                self.menu_choices = None;
                 Command::none()
             }
             CurseSlot(s, b) => {
@@ -296,6 +301,15 @@ impl Application for UI {
             RemoveItem(slot, item) => {
                 self.characters[self.current_character].items.remove(item);
                 self.slots[slot].items = None;
+                Command::none()
+            }
+            ChooseItem(slot, id) => {
+                self.characters[self.current_character].items.push(id);
+                self.slots
+                    .iter_mut()
+                    .find(|x| x.slot == slot)
+                    .unwrap()
+                    .items = None;
                 Command::none()
             }
         }
@@ -323,8 +337,9 @@ impl Application for UI {
 
         let items_by_id: HashMap<String, &Item> =
             self.items.iter().map(|i| (i.id.clone(), i)).collect();
-        // let items_by_slot: HashMap<Slot, Vec<&Item>> = items.iter().map(|i| (i.slot.parse(), i)).into_group_map();
-        //
+        let items_by_slot: HashMap<Slot, Vec<&Item>> =
+            self.items.iter().map(|i| (i.slot, i)).into_group_map();
+
         let slots = self
             .slots
             .iter_mut()
@@ -338,12 +353,12 @@ impl Application for UI {
                         items,
                     },
                 )| {
+                    let slot = *slot;
                     let slot_button = Button::new(button, Text::new(slot.to_string()))
-                        .on_press(Message::SlotPressed(slot.clone()));
-                    let s2 = slot.clone();
+                        .on_press(Message::SlotPressed(slot));
                     let cursed_checkbox =
-                        Checkbox::new(char.curses.contains(slot), "cursed", move |b| {
-                            Message::CurseSlot(s2.clone(), b)
+                        Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
+                            Message::CurseSlot(slot, b)
                         });
                     let items_in_slot: Vec<(usize, &Item)> = char
                         .items
@@ -351,7 +366,7 @@ impl Application for UI {
                         .enumerate()
                         .filter_map(|(n, i)| {
                             let x = items_by_id[i];
-                            if &x.slot == slot {
+                            if x.slot == slot {
                                 Some((n, x))
                             } else {
                                 None
@@ -386,11 +401,64 @@ impl Application for UI {
             )
             .collect();
 
+        let menu = {
+            let menu_choices = match &self.menu_location {
+                None => vec![],
+                Some(MenuLocation::Weapon(weapon_type)) => todo!(),
+                Some(MenuLocation::Other(other_type)) => todo!(),
+                Some(slot) => {
+                    let slot = slot.to_slot();
+                    let e = vec![];
+                    let slot_items = items_by_slot.get(&slot).unwrap_or(&e);
+                    slot_items
+                        .into_iter()
+                        .map(|i| {
+                            (
+                                Text::new(i.name.clone()),
+                                Message::ChooseItem(slot, i.id.clone()),
+                            )
+                        })
+                        .collect()
+                }
+            };
+
+            if self.menu_choices.is_none() {
+                let v: Vec<button::State> =
+                    menu_choices.iter().map(|_| Default::default()).collect();
+                self.menu_choices.replace(v);
+            };
+            let menu_choice_buttons = self.menu_choices.as_mut().unwrap();
+
+            menu_choices
+                .into_iter()
+                .zip(menu_choice_buttons)
+                .map(|((l, m), b)| Button::new(b, l).on_press(m).into())
+                .collect()
+        };
+
         Row::new()
             .push(char_picker)
-            .push(Row::with_children(slots))
+            .push(
+                Column::new()
+                    .push(Row::with_children(slots))
+                    .push(layout_rows(menu, 5)),
+            )
             .into()
     }
+}
+
+fn layout_rows<'a, R>(v: Vec<iced::Element<'a, R>>, width: usize) -> iced::Element<R>
+where
+    R: 'a,
+{
+    Column::with_children(
+        v.into_iter()
+            .chunks(width)
+            .into_iter()
+            .map(|row| Row::with_children(row.collect()).into())
+            .collect(),
+    )
+    .into()
 }
 
 struct NDXData {
