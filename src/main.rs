@@ -6,11 +6,14 @@ use itertools::Itertools;
 use minidom::{quick_xml::Reader, Element, NSChoice};
 use regex::Regex;
 use thiserror::Error;
+use once_cell::sync::Lazy;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{create_dir_all, File};
 use std::io::BufReader;
+
+static PERM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"addchest|coins_x(?:15|2)").unwrap());
 
 #[derive(Debug, Error)]
 enum MainError {
@@ -42,6 +45,18 @@ impl Item {
             }
         }
         WeaponType::Other
+    }
+
+    fn other_type(&self) -> OtherItemType {
+        if PERM_RE.is_match(self.id.as_str()) {
+            return OtherItemType::Permanent;
+        }
+        for t in OtherItemType::all() {
+            if self.id.contains(&t.to_string()) {
+                return t;
+            }
+        }
+        OtherItemType::Other
     }
 }
 
@@ -252,7 +267,33 @@ impl fmt::Display for WeaponType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OtherItemType {
+    Permanent,
+    Resource,
     Other,
+}
+
+impl OtherItemType {
+    fn all() -> Vec<Self> {
+        use OtherItemType::*;
+        vec![
+            Other, Permanent, Resource,
+        ]
+    }
+}
+
+impl fmt::Display for OtherItemType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use OtherItemType::*;
+        write!(
+            f,
+            "{}",
+            match self {
+                Permanent => "perm",
+                Resource => "resource",
+                Other => "other",
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -342,7 +383,7 @@ impl Application for UI {
                 Command::none()
             }
             CurseSlot(s, b) => {
-                if b {
+                if b && s != Slot::Other {
                     self.characters[self.current_character].curses.insert(s);
                 } else {
                     self.characters[self.current_character].curses.remove(&s);
@@ -412,8 +453,7 @@ impl Application for UI {
                     let slot = *slot;
                     let slot_button = Button::new(button, Text::new(slot.to_string()))
                         .on_press(Message::SlotPressed(slot));
-                    let cursed_checkbox =
-                        Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
+                    let cursed_checkbox = Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
                             Message::CurseSlot(slot, b)
                         });
                     let items_in_slot: Vec<(usize, &Item)> = char
@@ -482,7 +522,7 @@ impl Application for UI {
                             .unwrap_or(&e)
                             .into_iter()
                             .filter(|w| w.weapon_type() == *weapon_type);
-                        items_to_menu_choices(Slot::Weapon, weapons.cloned())
+                        items_to_menu_choices(Slot::Other, weapons.cloned())
                     } else {
                         WeaponType::all()
                             .into_iter()
@@ -495,7 +535,27 @@ impl Application for UI {
                             .collect()
                     }
                 }
-                Some(MenuLocation::Other(other_type)) => todo!(),
+                Some(MenuLocation::Other(other_type)) => {
+                    if let Some(other_type) = other_type {
+                        let e = vec![];
+                        let items = items_by_slot
+                            .get(&Slot::Other)
+                            .unwrap_or(&e)
+                            .into_iter()
+                            .filter(|x| x.other_type() == *other_type);
+                        items_to_menu_choices(Slot::Other, items.cloned())
+                    } else {
+                        OtherItemType::all()
+                            .into_iter()
+                            .map(|t| {
+                                (
+                                    Text::new(t.to_string()).into(),
+                                    Message::ChooseMenu(MenuLocation::Other(Some(t))),
+                                )
+                            })
+                            .collect()
+                    }
+                }
                 Some(slot) => {
                     let slot = slot.to_slot();
                     let e = vec![];
