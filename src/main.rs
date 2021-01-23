@@ -4,9 +4,9 @@ use iced::{
 };
 use itertools::Itertools;
 use minidom::{quick_xml::Reader, Element, NSChoice};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use thiserror::Error;
-use once_cell::sync::Lazy;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -275,9 +275,7 @@ enum OtherItemType {
 impl OtherItemType {
     fn all() -> Vec<Self> {
         use OtherItemType::*;
-        vec![
-            Other, Permanent, Resource,
-        ]
+        vec![Other, Permanent, Resource]
     }
 }
 
@@ -315,6 +313,21 @@ struct CharPick {
 impl fmt::Display for CharPick {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+impl UI {
+    fn write_xml(&mut self) {
+        let new_chars = character_element(&self.characters[..]);
+        self.root.remove_child("characters", NSChoice::None);
+        self.root.append_child(new_chars);
+        let result: Result<(), MainError> = File::create("mods/Unawareness/necrodancer.xml")
+            .map_err(Into::into)
+            .and_then(|mut f| Ok(self.root.write_to(&mut f)?));
+        if let Err(e) = result {
+            eprintln!("{}", e);
+            return;
+        }
     }
 }
 
@@ -388,11 +401,13 @@ impl Application for UI {
                 } else {
                     self.characters[self.current_character].curses.remove(&s);
                 }
+                self.write_xml();
                 Command::none()
             }
             RemoveItem(slot, item) => {
                 self.characters[self.current_character].items.remove(item);
                 self.slots[slot].items = None;
+                self.write_xml();
                 Command::none()
             }
             ChooseItem(slot, id) => {
@@ -402,6 +417,7 @@ impl Application for UI {
                     .find(|x| x.slot == slot)
                     .unwrap()
                     .items = None;
+                self.write_xml();
                 Command::none()
             }
             ChooseMenu(ml) => {
@@ -453,7 +469,8 @@ impl Application for UI {
                     let slot = *slot;
                     let slot_button = Button::new(button, Text::new(slot.to_string()))
                         .on_press(Message::SlotPressed(slot));
-                    let cursed_checkbox = Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
+                    let cursed_checkbox =
+                        Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
                             Message::CurseSlot(slot, b)
                         });
                     let items_in_slot: Vec<(usize, &Item)> = char
@@ -751,19 +768,13 @@ fn main_2() -> Result<(), MainError> {
 
     let ndxdata = load_necrodancer_xml()?;
 
-    // characters[11].items.push("weapon_cat".to_string());
-    // let new_chars = character_element(&characters[..]);
-    // root.remove_child("characters", NSChoice::None);
-    // root.append_child(new_chars);
-    // root.write_to(&mut File::create("mods/Unawareness/necrodancer.xml")?);
-
     UI::run(Settings::with_flags(ndxdata))?;
     Ok(())
 }
 
 fn main() -> Result<(), MainError> {
     main_2().map_err(|e| {
-        println!("{}", e);
+        eprintln!("{}", e);
         e
     })
 }
