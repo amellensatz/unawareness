@@ -4,11 +4,12 @@ use iced::{
 };
 use minidom::{quick_xml::Reader, Element, NSChoice};
 use regex::Regex;
-use std::collections::{HashMap,HashSet};
+use thiserror::Error;
+
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{create_dir_all, File};
 use std::io::BufReader;
-use thiserror::Error;
 
 #[derive(Debug, Error)]
 enum MainError {
@@ -117,7 +118,7 @@ struct UI {
     current_character: usize,
     current_char_pick: pick_list::State<CharPick>,
     slots: Vec<SlotUI>,
-    item_choices: Vec<button::State>,
+    item_choices: Option<Vec<button::State>>,
     menu_location: Option<MenuLocation>,
 }
 
@@ -125,7 +126,7 @@ struct UI {
 struct SlotUI {
     slot: Slot,
     button: button::State,
-    items: Vec<button::State>,
+    items: Option<Vec<button::State>>,
 }
 
 #[derive(Debug)]
@@ -202,6 +203,7 @@ enum Message {
     CharPicked(usize),
     SlotPressed(Slot),
     CurseSlot(Slot, bool),
+    RemoveItem(usize, usize),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -239,11 +241,11 @@ impl Application for UI {
                     .map(|slot| SlotUI {
                         slot,
                         button: Default::default(),
-                        items: vec![],
+                        items: None,
                     })
                     .collect(),
                 menu_location: None,
-                item_choices: vec![],
+                item_choices: None,
             },
             Command::none(),
         )
@@ -254,8 +256,6 @@ impl Application for UI {
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
-        eprintln!("got message {:?}", message);
-
         use Message::*;
         match message {
             CharPicked(i) => {
@@ -266,7 +266,7 @@ impl Application for UI {
                     .map(|slot| SlotUI {
                         slot,
                         button: Default::default(),
-                        items: vec![],
+                        items: None,
                     })
                     .collect();
                 Command::none()
@@ -293,6 +293,11 @@ impl Application for UI {
                 }
                 Command::none()
             }
+            RemoveItem(slot, item) => {
+                self.characters[self.current_character].items.remove(item);
+                self.slots[slot].items = None;
+                Command::none()
+            }
         }
     }
 
@@ -316,25 +321,67 @@ impl Application for UI {
             |p| Message::CharPicked(p.idx),
         );
 
-        // let items_by_id: HashMap<String, &Item> = items.iter().map(|i| (i.id.clone(), i)).collect();
+        let items_by_id: HashMap<String, &Item> =
+            self.items.iter().map(|i| (i.id.clone(), i)).collect();
         // let items_by_slot: HashMap<Slot, Vec<&Item>> = items.iter().map(|i| (i.slot.parse(), i)).into_group_map();
         //
         let slots = self
             .slots
             .iter_mut()
+            .enumerate()
             .map(
-                |SlotUI {
-                     slot,
-                     button,
-                     items,
-                 }| {
+                |(
+                    slot_idx,
+                    SlotUI {
+                        slot,
+                        button,
+                        items,
+                    },
+                )| {
                     let slot_button = Button::new(button, Text::new(slot.to_string()))
                         .on_press(Message::SlotPressed(slot.clone()));
                     let s2 = slot.clone();
-                    let cursed_checkbox = Checkbox::new(char.curses.contains(slot), "cursed", move |b| {
-                        Message::CurseSlot(s2.clone(), b)
-                    });
-                    Column::new().push(slot_button).push(cursed_checkbox).into()
+                    let cursed_checkbox =
+                        Checkbox::new(char.curses.contains(slot), "cursed", move |b| {
+                            Message::CurseSlot(s2.clone(), b)
+                        });
+                    let items_in_slot: Vec<(usize, &Item)> = char
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(n, i)| {
+                            let x = items_by_id[i];
+                            if &x.slot == slot {
+                                Some((n, x))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let item_buttons = if let Some(items) = items {
+                        items
+                    } else {
+                        let v: Vec<button::State> =
+                            items_in_slot.iter().map(|_| Default::default()).collect();
+                        items.replace(v);
+                        items.as_mut().unwrap()
+                    };
+                    let button_column = Column::with_children(
+                        items_in_slot
+                            .into_iter()
+                            .zip(item_buttons)
+                            .map(|((n, i), b)| {
+                                Button::new(b, Text::new(i.name.clone()))
+                                    .on_press(Message::RemoveItem(slot_idx, n))
+                                    .into()
+                            })
+                            .collect(),
+                    );
+                    Column::new()
+                        .push(slot_button)
+                        .push(cursed_checkbox)
+                        .push(button_column)
+                        .into()
                 },
             )
             .collect();
