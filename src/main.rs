@@ -1,7 +1,9 @@
 use iced::{
-    button, pick_list, Application, Button, Checkbox, Column, Command, Element as IcedElement,
-    PickList, Row, Settings, Text,
+    button, image::Handle as ImageHandle, pick_list, Align, Application, Button, Checkbox, Column,
+    Command, Element as IcedElement, HorizontalAlignment, Image, Length, PickList, Row, Settings,
+    Text,
 };
+use image::io::Reader as ImageReader;
 use itertools::Itertools;
 use minidom::{quick_xml::Reader, Element, NSChoice};
 use once_cell::sync::Lazy;
@@ -12,29 +14,20 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{create_dir_all, File};
 use std::io::BufReader;
+use std::path::PathBuf;
 
-static PERM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"addchest|coins_x(?:15|2)").unwrap());
-
-#[derive(Debug, Error)]
-enum MainError {
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-    #[error(transparent)]
-    Minidom(#[from] minidom::Error),
-    #[error("Missing variable `{0}`")]
-    DotEnv(String, #[source] dotenv::Error),
-    #[error("Malformed necrodancer.xml: {0}")]
-    BadNecroXML(String),
-    #[error(transparent)]
-    Iced(#[from] iced::Error),
-}
+static FORBIDDEN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"addchest|coins_x(?:15|2)|resource_(?:coin(?:[0-9]|10)$|hoard_gold|diamond)|bomb_grenade|misc_magnet").unwrap()
+});
+static USE_TEXT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"resource|double_heart_transplant|spell_charm").unwrap());
 
 #[derive(Debug)]
 struct Item {
     id: String,
     name: String,
     slot: Slot,
-    image: String,
+    image: ImageHandle,
 }
 
 impl Item {
@@ -48,9 +41,6 @@ impl Item {
     }
 
     fn other_type(&self) -> OtherItemType {
-        if PERM_RE.is_match(self.id.as_str()) {
-            return OtherItemType::Permanent;
-        }
         for t in OtherItemType::all() {
             if self.id.contains(&t.to_string()) {
                 return t;
@@ -267,7 +257,6 @@ impl fmt::Display for WeaponType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OtherItemType {
-    Permanent,
     Resource,
     Other,
 }
@@ -275,7 +264,7 @@ enum OtherItemType {
 impl OtherItemType {
     fn all() -> Vec<Self> {
         use OtherItemType::*;
-        vec![Other, Permanent, Resource]
+        vec![Other, Resource]
     }
 }
 
@@ -286,7 +275,6 @@ impl fmt::Display for OtherItemType {
             f,
             "{}",
             match self {
-                Permanent => "perm",
                 Resource => "resource",
                 Other => "other",
             }
@@ -326,8 +314,20 @@ impl UI {
             .and_then(|mut f| Ok(self.root.write_to(&mut f)?));
         if let Err(e) = result {
             eprintln!("{}", e);
-            return;
         }
+    }
+}
+
+fn display_item<R>(i: &Item) -> IcedElement<'static, R> {
+    if USE_TEXT_RE.is_match(i.id.as_str()) {
+        Text::new(i.name.replace(" ", "\n"))
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .into()
+    } else {
+        Image::new(i.image.clone())
+            .width(50.into())
+            .height(50.into())
+            .into()
     }
 }
 
@@ -472,7 +472,8 @@ impl Application for UI {
                     let cursed_checkbox =
                         Checkbox::new(char.curses.contains(&slot), "cursed", move |b| {
                             Message::CurseSlot(slot, b)
-                        });
+                        })
+                        .spacing(5);
                     let items_in_slot: Vec<(usize, &Item)> = char
                         .items
                         .iter()
@@ -494,18 +495,23 @@ impl Application for UI {
                         items.replace(v);
                         items.as_mut().unwrap()
                     };
+                    let n = items_in_slot.len();
                     let button_column = Column::with_children(
                         items_in_slot
                             .into_iter()
                             .zip(item_buttons)
                             .map(|((n, i), b)| {
-                                Button::new(b, Text::new(i.name.clone()))
+                                Button::new(b, display_item(i))
                                     .on_press(Message::RemoveItem(slot_idx, n))
                                     .into()
                             })
                             .collect(),
-                    );
+                    )
+                    .align_items(Align::Center)
+                    .height(if n > 5 { Length::Shrink } else { 350.into() });
                     Column::new()
+                        .align_items(Align::Center)
+                        .spacing(5)
                         .push(slot_button)
                         .push(cursed_checkbox)
                         .push(button_column)
@@ -514,17 +520,12 @@ impl Application for UI {
             )
             .collect();
 
-        fn items_to_menu_choices<'a, R>(
+        fn items_to_menu_choices<'a>(
             slot: Slot,
             items: impl Iterator<Item = &'a Item>,
-        ) -> Vec<(iced::Element<'static, R>, Message)> {
+        ) -> Vec<(IcedElement<'static, Message>, Message)> {
             items
-                .map(|i| {
-                    (
-                        Text::new(i.name.clone()).into(),
-                        Message::ChooseItem(slot, i.id.clone()),
-                    )
-                })
+                .map(|i| (display_item(i), Message::ChooseItem(slot, i.id.clone())))
                 .collect()
         }
 
@@ -539,7 +540,7 @@ impl Application for UI {
                             .unwrap_or(&e)
                             .into_iter()
                             .filter(|w| w.weapon_type() == *weapon_type);
-                        items_to_menu_choices(Slot::Other, weapons.cloned())
+                        items_to_menu_choices(Slot::Weapon, weapons.cloned())
                     } else {
                         WeaponType::all()
                             .into_iter()
@@ -599,14 +600,15 @@ impl Application for UI {
             .push(char_picker)
             .push(
                 Column::new()
-                    .push(Row::with_children(slots))
-                    .push(layout_rows(menu, 5)),
+                    .align_items(Align::Center)
+                    .push(Row::with_children(slots).spacing(10))
+                    .push(layout_rows(menu, 8)),
             )
             .into()
     }
 }
 
-fn layout_rows<'a, R>(v: Vec<iced::Element<'a, R>>, width: usize) -> iced::Element<R>
+fn layout_rows<'a, R>(v: Vec<IcedElement<'a, R>>, width: usize) -> IcedElement<R>
 where
     R: 'a,
 {
@@ -614,9 +616,14 @@ where
         v.into_iter()
             .chunks(width)
             .into_iter()
-            .map(|row| Row::with_children(row.collect()).into())
+            .map(|row| {
+                Row::with_children(row.collect())
+                    .align_items(Align::Center)
+                    .into()
+            })
             .collect(),
     )
+    .align_items(Align::Center)
     .into()
 }
 
@@ -654,7 +661,31 @@ fn load_necrodancer_xml() -> Result<NDXData, MainError> {
             } else {
                 Slot::Other
             };
-            let image = i.text();
+            let image_path = i.text();
+            let width = i
+                .attr("imageW")
+                .map(str::parse)
+                .transpose()
+                .ok()
+                .flatten()
+                .unwrap_or(24);
+            let height = i
+                .attr("imageH")
+                .map(str::parse)
+                .transpose()
+                .ok()
+                .flatten()
+                .unwrap_or(24);
+            let img = ImageReader::open(
+                ["data/items/", image_path.as_str()]
+                    .iter()
+                    .collect::<PathBuf>(),
+            )?
+            .decode()?
+            .crop(0, 0, width, height)
+            .to_bgra8();
+            let image = ImageHandle::from_pixels(img.width(), img.height(), img.into_vec());
+
             Ok(Item {
                 id,
                 name,
@@ -662,7 +693,12 @@ fn load_necrodancer_xml() -> Result<NDXData, MainError> {
                 image,
             })
         })
-        .collect::<Result<_, MainError>>()?;
+        .filter(|i| {
+            i.as_ref()
+                .map(|i| !FORBIDDEN_RE.is_match(i.id.as_str()))
+                .unwrap_or(true)
+        })
+        .collect::<Result<Vec<Item>, MainError>>()?;
 
     let characters_e = root
         .get_child("characters", NSChoice::None)
@@ -758,6 +794,22 @@ fn character_element(chars: &[Character]) -> Element {
             )
         }))
         .build()
+}
+
+#[derive(Debug, Error)]
+enum MainError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    Minidom(#[from] minidom::Error),
+    #[error("Missing variable `{0}`")]
+    DotEnv(String, #[source] dotenv::Error),
+    #[error("Malformed necrodancer.xml: {0}")]
+    BadNecroXML(String),
+    #[error(transparent)]
+    Iced(#[from] iced::Error),
+    #[error(transparent)]
+    Image(#[from] image::ImageError),
 }
 
 fn main_2() -> Result<(), MainError> {
