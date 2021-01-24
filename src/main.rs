@@ -17,7 +17,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 static FORBIDDEN_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"addchest|coins_x(?:15|2)|resource_(?:coin(?:[0-9]|10)$|hoard_gold|diamond)|bomb_grenade|misc_magnet").unwrap()
+    Regex::new(r"addchest|perm_heart|coins_x(?:15|2)|resource_(?:coin(?:[0-9]|10)$|hoard_gold|diamond)|bomb_grenade|misc_magnet").unwrap()
 });
 static USE_TEXT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"resource|double_heart_transplant|spell_charm").unwrap());
@@ -40,13 +40,16 @@ impl Item {
         WeaponType::Other
     }
 
-    fn other_type(&self) -> OtherItemType {
-        for t in OtherItemType::all() {
+    fn action_type(&self) -> ActionType {
+        if self.id.contains("tome") {
+            return ActionType::Scroll;
+        }
+        for t in ActionType::all() {
             if self.id.contains(&t.to_string()) {
                 return t;
             }
         }
-        OtherItemType::Other
+        ActionType::Other
     }
 }
 
@@ -156,9 +159,9 @@ enum MenuLocation {
     Ring,
     Spell,
     Torch,
-    Action,
+    Action(Option<ActionType>),
     Misc,
-    Other(Option<OtherItemType>),
+    Other,
 }
 
 impl MenuLocation {
@@ -173,9 +176,9 @@ impl MenuLocation {
             Ring => Slot::Ring,
             Spell => Slot::Spell,
             Torch => Slot::Torch,
-            Action => Slot::Action,
+            Action(_) => Slot::Action,
             Misc => Slot::Misc,
-            Other(_) => Slot::Other,
+            Other => Slot::Other,
         }
     }
 
@@ -190,9 +193,9 @@ impl MenuLocation {
             Slot::Ring => Ring,
             Slot::Spell => Spell,
             Slot::Torch => Torch,
-            Slot::Action => Action,
+            Slot::Action => Action(None),
             Slot::Misc => Misc,
-            Slot::Other => Other(None),
+            Slot::Other => Other,
         }
     }
 }
@@ -256,26 +259,28 @@ impl fmt::Display for WeaponType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OtherItemType {
-    Resource,
+enum ActionType {
+    Food,
+    Scroll,
     Other,
 }
 
-impl OtherItemType {
+impl ActionType {
     fn all() -> Vec<Self> {
-        use OtherItemType::*;
-        vec![Other, Resource]
+        use ActionType::*;
+        vec![Food, Scroll, Other]
     }
 }
 
-impl fmt::Display for OtherItemType {
+impl fmt::Display for ActionType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use OtherItemType::*;
+        use ActionType::*;
         write!(
             f,
             "{}",
             match self {
-                Resource => "resource",
+                Food => "food",
+                Scroll => "scroll",
                 Other => "other",
             }
         )
@@ -553,22 +558,22 @@ impl Application for UI {
                             .collect()
                     }
                 }
-                Some(MenuLocation::Other(other_type)) => {
-                    if let Some(other_type) = other_type {
+                Some(MenuLocation::Action(action_type)) => {
+                    if let Some(action_type) = action_type {
                         let e = vec![];
                         let items = items_by_slot
-                            .get(&Slot::Other)
+                            .get(&Slot::Action)
                             .unwrap_or(&e)
                             .into_iter()
-                            .filter(|x| x.other_type() == *other_type);
-                        items_to_menu_choices(Slot::Other, items.cloned())
+                            .filter(|x| x.action_type() == *action_type);
+                        items_to_menu_choices(Slot::Action, items.cloned())
                     } else {
-                        OtherItemType::all()
+                        ActionType::all()
                             .into_iter()
                             .map(|t| {
                                 (
                                     Text::new(t.to_string()).into(),
-                                    Message::ChooseMenu(MenuLocation::Other(Some(t))),
+                                    Message::ChooseMenu(MenuLocation::Action(Some(t))),
                                 )
                             })
                             .collect()
