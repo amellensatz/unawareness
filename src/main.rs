@@ -807,8 +807,6 @@ enum MainError {
     IO(#[from] std::io::Error),
     #[error(transparent)]
     Minidom(#[from] minidom::Error),
-    #[error("Missing variable `{0}`")]
-    DotEnv(String, #[source] dotenv::Error),
     #[error("Malformed necrodancer.xml: {0}")]
     BadNecroXML(String),
     #[error(transparent)]
@@ -818,12 +816,11 @@ enum MainError {
 }
 
 fn main_2() -> Result<(), MainError> {
-    let necrodancer_path = dotenv::var("NECRODANCER_PATH")
-        .map_err(|e| MainError::DotEnv("NECRODANCER_PATH".to_string(), e))?;
+    let necrodancer_path = dotenv::var("NECRODANCER_PATH").unwrap_or("../..".to_string());
     std::env::set_current_dir(necrodancer_path)?;
-    create_dir_all("mods/Unawareness")?;
 
     let ndxdata = load_necrodancer_xml()?;
+    create_dir_all("mods/Unawareness")?;
 
     let mut settings = Settings::with_flags(ndxdata);
     settings.default_font = Some(include_bytes!("../necrosans.ttf"));
