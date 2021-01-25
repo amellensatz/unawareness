@@ -825,7 +825,11 @@ fn main_2() -> Result<(), MainError> {
 
     let ndxdata = load_necrodancer_xml()?;
 
-    UI::run(Settings::with_flags(ndxdata))?;
+    let mut settings = Settings::with_flags(ndxdata);
+    settings.default_font = Some(include_bytes!("../necrosans.ttf"));
+    settings.default_text_size = 16;
+    settings.window.size = (1300, 600);
+    UI::run(settings)?;
     Ok(())
 }
 
